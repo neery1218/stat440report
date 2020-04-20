@@ -253,7 +253,7 @@ Basic information about the stan fit (ESS, Rhat) can be found in the Appendix.
 The posterior distributions are shown on Figure 3.
 
 
-```{r postDistributions, eval=TRUE, cache=TRUE, echo=FALSE, fig.height = 3.5, fig.cap="Sampled Posterior Distributions. The black vertical lines indicate the value of the true parameter."}
+```{r postDistributions, eval=TRUE, cache=TRUE, echo=FALSE, fig.height = 3.5, message=FALSE,warning=FALSE, fig.cap="Sampled Posterior Distributions. The black vertical lines indicate the value of the true parameter."}
 # posterior distributions of fitted models (all k level approximations)
 testproject1::plot_param_posterior_distributions(post_tb, fOU_data)
 
