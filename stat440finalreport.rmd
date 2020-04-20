@@ -217,10 +217,10 @@ post_tb$K <- factor(post_tb$K)
 fits <- fits_and_samples$fits
 ```
 
-We have unit tests for our code, but visual checks are nice too. Given our simulated data, we re-constructed the \(dG\)'s and made sure their autocorrelation was close enough to the expected autocorrelation from (2).
+We have unit tests for our code, but visual checks are nice too. Given our simulated data, we re-constructed the \(dG\)'s and made sure their autocorrelation was close enough to the expected autocorrelation from (2). This is available in the Appendix.
 
 
-#### 2.1 Fitting the model
+#### 2.2 Fitting the model
 
 Once the analytic gradient was hooked in, it was fairly straightforward to implement the fOU model in stan. We fit the data with a 1,2,4-level Euler approximation.
 
@@ -351,10 +351,10 @@ Now, to simulate a future path given our simulated dataset, we follow the follow
 
 If we simulate enough future paths, we can get a good prediction interval. 
 
-Simulating \(dG_{future}\) is an expensive computation if the simulated dataset is large or the number of prediction points is large (inverting and multiplying matrices is hard!). As an approximation, we could use the last *P* obsverved fBM increments and discard the rest, as the correlation values are likely small, especially if *H* is close to 0.5. We only tried to predict 10 points so we didn't run into this issue. Also, we picked H = 0.9 for our simulated dataset, so we would need to use a lot of observed points anyways.
+Simulating \(dG_{future}\) is an expensive computation if the simulated dataset is large or the number of prediction points is large (inverting and multiplying matrices is hard!). As an approximation, we could use the last *P* obsverved fBM increments and discard the rest, as the correlation values are likely small, especially if *H* is close to 0.5. We only tried to predict 20 points so we didn't run into this issue. Also, we picked H = 0.9 for our simulated dataset, so we would need to use a lot of observed points anyways.
 
 
-The results after Step 3 are shown in Figure 8. Note that since the observed dGs are above zero, the distribution of future dGs are also centered above zero.
+The results after Step 3 are shown in Figure 8. Note that the distribution of future dGs is centered above zero.
 
 
 ```{r dGFuture, eval=TRUE, cache=TRUE, echo=FALSE, fig.height = 4, fig.cap="Grey: distribution of observed dG values. Blue: distribution of predicted future dG values. 100 simulations were done to create these distributions."}
@@ -382,7 +382,7 @@ The results of Step 4 is shown in Figure 9. Since the distribution of future dGs
 The prediction interval also widens as time increases. This is because our picked \(\gamma\) value is very small. With a \(\gamma\) value of 1, the prediction interval will be fairly flat.
 
 
-```{r predictionIntervals, eval=TRUE, cache=TRUE, echo=FALSE, fig.height = 4, fig.cap="Last 20 points from the dataset, and 50% and 90% prediction intervals (grey, dark grey) generated with 100 future sample paths."}
+```{r predictionIntervals, eval=TRUE, cache=TRUE, echo=FALSE, fig.height = 4, fig.cap="Last 20 points from the dataset, and 50% and 90% prediction intervals (purple, dark purple) generated with 100 future sample paths."}
 plot_prediction_interval(fOU_data, pred_obj$pred_matrix)
 abline(h=tail(fOU_data$Xt, 1))
 ```
