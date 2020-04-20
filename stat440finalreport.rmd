@@ -74,7 +74,7 @@ H is called the Hurst index and its value determines what kind of process the fB
 
 #### 1.2 Colored-noise Stochastic Differential Equations
 
-A colored-noise stochastic differential equation is a SDE where the Brownian increments are correlated with each other.
+A colored-noise stochastic differential equation is an SDE where the Brownian increments are correlated with each other.
 
 **Definition:** Let \(X_{t}\) be a continouous time stochastic process described by the following differential equation:
 
@@ -116,7 +116,7 @@ Where:
 
 Using a k-level approximation is computationally more expensive, but generally improves accuracy of the model fit.
 
-Figure 1 shows example fOU processes with varying parameter values.
+Figure 1 shows an example of fOU processes with varying parameter values.
 
 ```{r plotfOU, eval=TRUE, cache=TRUE, echo=FALSE, warnings = FALSE, fig.height= 8, fig.cap="Example fOU processes with varying parameters."}
 # simulating fOU data
@@ -267,7 +267,7 @@ Fortunately, we can test this. Formula (1) shows the complete data log likelihoo
 
 We can also check if the mean posterior estimates are global maximums. The parameter constraints from our priors makes the global check feasible. As seen in Figure 4, the mean posterior estimates for the acf parameters are at or extremely close to the maximums. The fits for the 2,4-level fits are included in the appendix.
 
-In figure 4, why did we use the mean as our estimator? The posterior distributions from figure X do look a little skewed, but still look fairly normal. As a visual test, we computed the qq plots for the posteriors of the 1-level euler approximation. Observe Figure 5.
+In figure 4, why did we use the mean as our estimator? The posterior distributions from figure 3 do look a little skewed, but still look fairly normal. As a visual test, we computed the qq plots for the posteriors of the 1-level euler approximation. Observe Figure 5.
 
 
 Towards the tails, the qq-plot (Figure 5) definitely shows some discrepancies. We briefly considered (and attempted) kernel density estimation to get the _true_ mode of the sampled posterior, but the differences were negligible.
@@ -288,7 +288,7 @@ qqnorm(post_tb %>% filter(K == 4) %>% pull(H), main = "qq-plot H", cex = 0.2)
 # given the qqplots, justify using the mean as the MAP estimate
 ```
 
-From these checks, we conclude that our model fits for the autocorrelation parameters (\(\theta = (\mu, \gamma, H) \)) were successful.
+From these checks, we concluded that our model fits for the autocorrelation parameters (\(\theta = (\mu, \gamma, H) \)) were successful.
 
 For the 2,4-level Euler approximation fits, we also have to verify the correctness of the interpolated "missing data". We have numerical tests, but we wanted a visual check as well.  
 
