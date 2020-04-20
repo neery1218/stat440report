@@ -1,0 +1,548 @@
+---
+title: "Fast Likelihood Inference for Stationary Gaussian Time Series"
+output:
+  pdf_document: default
+  html_document: default
+# output:
+#   bookdown::html_document2: default
+#   bookdown::pdf_document2: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+title: "Superfast Likelihood Inference for Stationary Gaussian Time Series"
+author: "Neerajen Sritharan, Pratyush Pal"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: readable
+#bibliography: references.bib
+#csl: taylor-and-francis-harvard-x.csl
+link-citations: true
+vignette: >
+  %\VignetteIndexEntry{SuperGauss}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+\newcommand{\bm}[1]{\boldsymbol{#1}}
+\newcommand{\rv}[3][1]{#2_{#1},\ldots,#2_{#3}}
+\newcommand{\X}{\bm{X}}
+\newcommand{\Z}{\bm{Z}}
+\newcommand{\cov}{\mathrm{cov}}
+\newcommand{\var}{\mathrm{var}}
+\newcommand{\dt}{\Delta t}
+\newcommand{\msd}{\mathrm{\scriptsize MSD}}
+\newcommand{\acf}{\mathrm{\scriptsize ACF}}
+\newcommand{\dX}{\Delta\X}
+\newcommand{\VH}{\bm{V}_H}
+\newcommand{\bz}{\bm{0}}
+\newcommand{\TT}{\bm{T}}
+\newcommand{\Toep}{\mathrm{Toeplitz}}
+\newcommand{\tth}{\bm{\theta}}
+\newcommand{\N}{\mathcal{N}}
+\newcommand{\gga}{\bm{\gamma}}
+\newcommand{\SSi}{\bm{\Sigma}}
+
+### Abstract
+
+For our project, we used the SuperGauss library to implement an analytic likelihood function and gradient for the $$Z \sim N(\mu, Toeplitz(\theta))$$ distribution in Stan. SuperGauss was required as Stan's default autodiff approach was far too slow. In this paper, we used the implemented distribution to fit a colored-noise stochastic differential equation. We simulated data from the fractional Ornstein-Uhlenbeck process, and fitted models with varying k-level approximations. Through our visual and numerical tests, the fitting was shown to be successful. We then describe a method to calculate prediction intervals, using the observed fBM increments to calculate future fBM increments.
+
+### 1. Introduction
+
+##### 1.1 Fractional Brownian Motion
+
+Fractional Brownian Motion (fBM) is a generalization of Brownian Motion wherein the Brownian increments are correlated with each other.
+
+**Defintion:** \(B^{H}_{t}\) is a continuous time stochastic process for which the
+following hold: 
+
+1. \(B^{H}_{0} = 0\)
+2. \(E[B^{H}_{t}] = 0\) \( \forall t \in [0, T]\)
+3. \(E[B^{H}_{t}B^{H}_{s}] = \frac{1}{2}(|t|^{2H} + |s|^{2H} - |t-s|^{2H})\) where \(H \in (0,1)\)
+
+H is called the Hurst index and its value determines what kind of process the fBM is: 
+
+- if \(H=\frac{1}{2}\) then the process is the same as Brownian motion.
+- if \(H >\frac{1}{2}\) then the increments are positively correlated.
+- if \(H <\frac{1}{2}\) then the increments are negatively correlated.
+
+#### 1.2 Colored-noise Stochastic Differential Equations
+
+A colored-noise stochastic differential equation is a SDE where the Brownian increments are correlated with each other.
+
+**Definition:** Let \(X_{t}\) be a continouous time stochastic process described by the following differential equation:
+
+$$
+ \ dX_{t}= \mu(X_{t})dt + \sigma * G_{t}, 
+$$
+where: 
+
+- \(\mu(x)\) and \(\sigma(x)\) are the drift and diffusion functions.
+- \(G_{t}\) is a Gaussian continuous stationary increments process.
+
+In this report, we look at cSDEs that use fractional Brownian increments. (1.1)
+
+#### 1.3 Fractional Ornstein-Uhlenbeck process 
+
+**Definition:** The fractional Ornstein-Uhlenbeck (fOU) is an SDE, \(X_{t}\) which satisfies the following: 
+
+$$
+  dX_{t} = -\gamma(X_{t}-\mu)dt + \sigma B^{H}_{t}
+$$
+where
+
+1. \(E[X_{t} = \mu] \)
+2. \(cov(X_{s},X_{s+t}) = \sigma^{2}\Gamma(2H+1)sin(\pi H) \int_{-\infty}^{\infty} e^{2\pi it\xi} \frac{ |2\pi \xi|^{1-2H}}{\gamma^{2} + (2\pi \xi)^{2}} d\xi\)
+
+The fOU process has a straightforward, analytical likelihood function, which makes it easy to test/verify our C++ implementation. In general, cSDEs do not have this property. (Lysy and Pillai, 2013).
+
+From (Lysy and Pillai, 2013), the complete data likelihood at a given resolution level k has the form: 
+
+\begin{equation}
+\log(\hat{L}(\gamma, \mu, \sigma, H | X_{k}) = \frac{1}{2}\big[\Delta (B^{H}_{k})^{'} V^{-1} (B^{H}_{k}) + log(\big|V\big|)+ M_{k} log(\sigma^{2})\big]
+\end{equation}
+
+Where:
+
+* \(\Delta (B^{H}_{k,n}) = \frac{1}{\sigma} \{\Delta X_{k,n} + \gamma (X_{k,n} - \mu)dt_{k}\}\) 
+
+* V is a toeplitx matrix with \(V_{i,j}= \frac{(\Delta t_k)^{2H}}{2}\big(|i-j+1|^{2H} + |i-j-1|^{2H} - 2|i-j|^{2H}\big)\)
+
+Using a k-level approximation is computationally more expensive, but generally improves accuracy of the model fit.
+
+Figure 1 shows example fOU processes with varying parameter values.
+
+```{r plotfOU, eval=TRUE, cache=TRUE, echo=FALSE, warnings = FALSE, fig.height= 8, fig.cap="Example fOU processes with varying parameters."}
+# simulating fOU data
+N <- 100
+par(mfrow=c(4,1))
+
+fd <- testproject1::fOU_sim(N, list(H=0.9, gamma=0.1, mu=0), 0, 1)
+plot(fd$Xt, main = "H = 0.9, gamma = 0.1, mu = 0", xlab = "time (t)", ylab = "Xt", cex = 0.5)
+
+fd <- testproject1::fOU_sim(N, list(H=0.2, gamma=0.1, mu=0), 0, 1)
+plot(fd$Xt, main = "H = 0.2, gamma = 0.1, mu = 0", xlab = "time (t)", ylab = "Xt", cex = 0.5)
+
+fd <- testproject1::fOU_sim(N, list(H=0.9, gamma=1, mu=0), 0, 1)
+plot(fd$Xt, main = "H = 0.9, gamma = 1, mu = 0", xlab = "time (t)", ylab = "Xt", cex = 0.5)
+
+fd <- testproject1::fOU_sim(N, list(H=0.2, gamma=1, mu=0), 0, 1)
+plot(fd$Xt, main = "H = 0.2, gamma = 1, mu = 0", xlab = "time (t)", ylab = "Xt", cex = 0.5)
+```
+
+
+#### 1.4 Fitting an fOU process with Stan
+
+Stan is a programming language for statistical inference, and lets users easily sample from posterior distributions. To do this, the likelihood function of interest must be implemented. Stan then uses reverse-mode autodifferentiation (Carpenter et al, 2017) to calculate gradients of the likelihood function, and uses Hamiltonian Monte Carlo Sampling (Betancourt, 2017a) to sample from the posterior. 
+
+Since the fOU process has a likelihood function form  (Formula 1), we could in theory use Stan out-of-the-box for model fitting. 
+
+Unfortunately, even though autodiff works well for most use cases, it's far too slow for our use case. All likelihood gradient evaluations require the inverse of the variance matrix, which is generally \(O(N^3)\). However the fOU variance matrix is Toeplitz, and such matrices can be solved much faster than \(O(N^3)\). Specifically, the R package SuperGauss lets us calculate the inverse and log-determinant in \(O(N log^2 N)\) time. 
+
+We used the SuperGauss package to implement a custom analytic gradient for the \(Z \sim Normal(\mu, Toeplitz(\theta))\) distribution.
+Then, we conducted a small experiement to compare the performance of Stan's default autodiff against our custom gradient.
+
+To test autodiff performance, we _attempted_ to fit the distribution:
+$$
+y \sim Normal(0, Toeplitz(acf(\theta))
+$$
+
+and compared it to the performance of:
+$$
+y \sim NormalToeplitz(0, acf(\theta))
+$$
+
+Where NormalToeplitz uses SuperGauss under-the-hood to efficiently calculate the log density and gradients of the distribution.
+
+As expected, fitting the autodiff was impossible. So instead we ran the stan fitting session and wrote down the reported time taken for 1000 gradient evaluations (Stan conveniently does this at the start to provide estimates as to when the model will finish.) The results (in seconds) are shown below.
+
+```{r autodiff, eval=TRUE, cache=TRUE, echo=FALSE, fig.cap="As expected, autodiff doesn't work for our use case. Times are reported in seconds"}
+matrixLength <- c(5, 10, 50, 100, 500, 1000, 5e3)
+autodiff_times <- c(0.8, 0.957, 3.59, 19.7, 976.62, 10238.7, 871285.0)
+analytic_times <- c(0.78, 0.95, 3.54, 4.52, 58.18, 62.67, 415.66)
+df <- as.data.frame(list(matrixLength=matrixLength, autodiff_times=autodiff_times, analytic_times=analytic_times))
+knitr::kable(df)
+```
+
+
+It is clear that an analytic gradient is mandatory if we want to fit a reasonably sized cSDE dataset.
+
+#### 1.5 Outline
+
+The rest of the paper covers all aspects of our model fitting thought process. We first run through how we _efficiently_ simulate data from the fOU process, with some visual tests. Using our custom analytic gradient, we fit an fOU process to a reasonably sized dataset, and analyze the fit using straightfoward diagnostic checks. Finally, we formulate a method to create prediction intervals and apply them to the simulated data. 
+
+### 2. Methodology
+
+
+#### 2.1 Simulating Coloured-Noise SDEs
+
+A naive approach to simulating fOU data in R would be to construct the variance matrix V from 1.3, simulate the fBM increments, then iteratively construct the $Xt$s. However this approach fails as the size of our dataset increases, because constructing V becomes very expensive (scales quadratically with N). Fortunately, SuperGauss provides a function that lets us efficiently sample fBM increments from a Toeplitz matrix V. We simply pass the autocorrelation function below:
+
+\begin{equation}
+acf(\gamma, H, \mu)_i = \frac{(\Delta t_k)^{2H}}{2}\big(|i|^{2H} + |i - 2|^{2H} - 2|i-1|^{2H})
+\end{equation}
+
+Where *i* is the index of the vector (starting at 1).
+
+After SuperGauss provides us the correlated fBM increments, we inductively construct the \(X_t\)'s. 
+
+\begin{equation}
+X_t = X_{t - 1} - \gamma(X_{t - 1} - \mu) * \Delta{t} + \sigma * B^{H}_{t_{i - 1}}
+\end{equation}
+
+For our model fitting, we wanted to pick parameters that let us have some visual intuition. Therefore we set *H* to 0.9 (very positively correlated), \(\gamma = 0.1\) (very slightly mean-reverting), \(\sigma = 1\), and \(\mu = 0\). The data we work with is shown in Figure 2.
+
+
+```{r loadsims, eval=TRUE, cache=TRUE, echo = FALSE, message = FALSE}
+library(tidyverse)
+library(testproject1)
+library(gridExtra)
+load("~/Documents/goodfits.RData")
+
+```
+
+```{r plotFittedData, eval=TRUE, cache=TRUE, echo=FALSE, fig.height= 4, fig.cap="300 points generated from fOU(H = 0.9, gamma = 0.1, sigma = 1, mu = 0)."}
+# TODO: compare simulated data to expected acf
+plot(fOU_data$Xt, xlab = "time (t)", ylab = "X(t)", main = "Simulated fOU process data", cex = 0.4)
+
+post_tb <- fits_and_samples$post_samples
+post_tb$K_factor <- factor(post_tb$K)
+post_tb$K <- factor(post_tb$K)
+fits <- fits_and_samples$fits
+```
+
+We have unit tests for our code, but visual checks are nice too. Given our simulated data, we re-constructed the \(dG\)'s and made sure their autocorrelation was close enough to the expected autocorrelation from (2).
+
+
+#### 2.1 Fitting the model
+
+Once the analytic gradient was hooked in, it was fairly straightforward to implement the fOU model in stan. We fit the data with a 1,2,4-level Euler approximation.
+
+The stanfit objects, and the dataset is available as an RData object [here](https://drive.google.com/open?id=192F_Dpp081zdG73LJzMVptuLSi6ZHcZ7). Please note that it's a 500MB file (there are a _lot_ of posterior samples.)
+
+Initially, the 4-level fitting was taking over an hour. In the interest of time, we set \(\sigma\) to 1 and added some reasonable priors.
+
+$$
+\mu \sim Normal(0, 10)
+$$
+$$
+H \sim Uniform(0, 1)
+$$
+$$
+\gamma \sim Uniform(0, 2)
+$$
+
+We also tried setting better initial values (close to the true parameters) but it is unclear if this improved the fitting time. 
+Please note that removing sigma, adding priors, adding initial values aren't needed to fit the model, but it helps speeds things up a lot.
+
+After these changes, the 1,2,4-level fits were all finished within forty minutes on a 4 core computer. 2000 iterations were used across 4 chains to fit each model.
+
+
+#### 2.3 Assessing fit
+
+This section covers some basic checks we ran to make sure the model fit correctly. Note that we also have numerical unit tests (mostly for our c++/stan code), but those aren't very intuitive. We included these checks here and not in the Appendix because to our knowledge, fitting an fOU process in Stan has never been done before, and a lot of our time was spent verifying the correctness of the model.
+
+Basic information about the stan fit (ESS, Rhat) can be found in the Appendix.
+
+The posterior distributions are shown on Figure 3.
+
+
+```{r postDistributions, eval=TRUE, cache=TRUE, echo=FALSE, fig.height = 3.5, fig.cap="Sampled Posterior Distributions. The black vertical lines indicate the value of the true parameter."}
+# posterior distributions of fitted models (all k level approximations)
+testproject1::plot_param_posterior_distributions(post_tb, fOU_data)
+
+```
+
+As seen in Figure 3, there doesn't seem to be any real improvement from using a higher level euler approximation. All the densities are very similar.
+
+At first glance, it seems like our posterior distributions are slightly off, as the true parameters are never at the peak of the posteriors. One potential explanation is that the simulated dataset's parameters are close, but aren't _exactly_ the true parameters. With a dataset of 300 points, this is definitely possible.
+
+Fortunately, we can test this. Formula (1) shows the complete data log likelihood for the fOU process. Similar to optimCheck, we can calculate the loglikelihood at many values close to the _mean_ posterior estimate for a chosen parameter while holding all other parameters constant. If our model fit is correct, the mean estimate will be a local (and hopefully global) maximum of the loglikelihood function. 
+
+We can also check if the mean posterior estimates are global maximums. The parameter constraints from our priors makes the global check feasible. As seen in Figure 4, the mean posterior estimates for the acf parameters are at or extremely close to the maximums. The fits for the 2,4-level fits are included in the appendix.
+
+In figure 4, why did we use the mean as our estimator? The posterior distributions from figure X do look a little skewed, but still look fairly normal. As a visual test, we computed the qq plots for the posteriors of the 1-level euler approximation. Observe Figure 5.
+
+
+Towards the tails, the qq-plot (Figure 5) definitely shows some discrepancies. We briefly considered (and attempted) kernel density estimation to get the _true_ mode of the sampled posterior, but the differences were negligible.
+
+
+```{r checkGlobalLocalMax, eval=TRUE, echo=FALSE, cache=TRUE, fig.height = 2.5, fig.cap="Likelihoods evaluated using the analytical formula. The vertical red line is the mean obtained from the posterior distributions from K = 1."}
+par(mfrow=c(2,3), cex.lab = 2, cex.axis=2.5, cex.main = 3, cex = 0.2)
+testproject1::plot_likelihoods(fOU_data, fits[[1]], 1)
+```
+
+```{r qqplots, eval=TRUE, cache=TRUE, echo=FALSE, fig.height = 2, fig.cap="QQplots for the 1-level fit."}
+# qqplot of mu, gamma, H to justify using means in plot_likelihoods
+par(mfrow=c(1,3))
+qqnorm(post_tb %>% filter(K == 1) %>% pull(mu), main = "qq-plot mu", cex = 0.2)
+qqnorm(post_tb %>% filter(K == 2) %>% pull(gamma), main = "qq-plot gamma", cex = 0.2)
+qqnorm(post_tb %>% filter(K == 4) %>% pull(H), main = "qq-plot H", cex = 0.2)
+
+# given the qqplots, justify using the mean as the MAP estimate
+```
+
+From these checks, we conclude that our model fits for the autocorrelation parameters (\(\theta = (\mu, \gamma, H) \)) were successful.
+
+For the 2,4-level Euler approximation fits, we also have to verify the correctness of the interpolated "missing data". We have numerical tests, but we wanted a visual check as well.  
+
+Using the posterior samples provided by Stan, we calculated 98% confidence intervals for the interpolated points, and plotted them alongside the actual dataset. See Figure 6. 
+
+In Figure 6, When two consecutive data points are close in value, the confidence interval (grey shaded area) is wider. The inverse is also true. The variation in the interpolated data points was what we expected of a correct fit.
+
+```{r CIsInterpolatedPoints, eval=TRUE, cache=TRUE, echo=FALSE, fig.height = 3, fig.cap="98% CIs obtained by sampling the Xt_k posterior distribution (grey shaded area)."}
+par(mfrow=c(1,2))
+
+# TODO: add mean points of Xt_k
+plot_CI(fOU_data, fits[[2]], 2, 10, "Xt with CIs (K = 2)")
+plot_CI(fOU_data, fits[[3]], 4, 10, "Xt with CIs (K = 4)")
+```
+
+#### 2.4 Predictions
+
+With traditional SDEs that use Brownian motion, empirically computing a prediction interval is relatively straightforward. For each sample path, draw \(\theta\) from the sampled posterior distribution, sample our brownian motion increments (basic rmnorm(N,..) since the increments don't depend on each other), and generate a path. Then generate an x% interval using the aggregate values of all paths.
+
+With fractional Brownian motion, we have to be a bit more careful, as the future fBM increments are _correlated_ with the _observed_ fBM increments. The future fBM increments (denoted \(dG_{future}\)) can be modelled as a joint distribution with the observed fBM increments (\(dG_{obs}\)). Say we've observed \(N_{obs}\) points and want to predict \(N_{future}\) points.
+
+Formally,
+
+\begin{equation}
+\begin{bmatrix} dG_{future} \\ dG_{obs} \end{bmatrix} \sim Normal(0, Toeplitz(\theta)) = Normal(0, \begin{bmatrix} \Sigma_{\theta, 11} & \Sigma_{\theta, 12} \\ \Sigma_{\theta, 21} & \Sigma_{\theta, 22} \end{bmatrix})
+\end{equation}
+
+Where \(\theta = (\mu, \gamma, H)\) is the true parameter(s) of the fOU process, \(\Sigma_{11}\) has dimension \(N_{future} \times N_{future}\) and \(\Sigma_{22}\) has dimension \(N_{obs} \times N_{obs}\).
+
+Note that we don't actually know \(\theta\) (well we do here because we generated this dataset, but in general we don't.) So we have to sample \(\theta_{sample}\) from the posterior distribution (Figure 3) to calculate \(dG_{obs}\). This leads to a distribution of \(dG_{obs}\), as shown in Figure 7.
+
+```{r dGobsDist, eval=TRUE, cache=TRUE, echo=FALSE, fig.height = 4, fig.cap="Distribution of observed dG values conditioned on the posterior theta distribution. The dark grey shaded area is a 50% confidence interval, the light grey is 90%, and the points are the observed dG values with the true theta."}
+
+actual_dGs <- testproject1::get_dGs(fOU_data, fOU_data$theta)
+pred_obj <- testproject1::fOU_predict(fOU_data, fits[[1]], tail(fOU_data$Xt, 1), fOU_data$delta_t, 20, 100)
+
+plot(NULL, xlim=c(1, 320), ylim=c(-3,3), main = "dGobs | theta, theta ~ Posterior", ylab = "dG(t)", xlab = "time (t)")
+CI <- apply(pred_obj$dGs_obs_matrix, 2, function(ts) { quantile(ts, probs = c(0.05, 0.95)) })
+polygon(c(1:300, rev(1:300)), c(CI[1,], rev(CI[2,])), col = "grey90", border = NA)
+
+CI <- apply(pred_obj$dGs_obs_matrix, 2, function(ts) { quantile(ts, probs = c(0.25, 0.75)) })
+polygon(c(1:300, rev(1:300)), c(CI[1,], rev(CI[2,])), col = "grey50", border = NA)
+points(1:300, actual_dGs, cex = 0.3)
+```
+
+We want to simulate \(dG_{future}\). Since we know \(dG_{obs}\), we need the conditional distribution of \(dG_{future}\) on \(dG_{obs}\). This is also Gaussian! Therefore, our new sampling distribution for \(dG_{future}\) is,
+
+\begin{equation}
+ dG_{future} | (dG_{obs} = g, \theta = \theta_{sample}) \sim Normal(\Sigma_{\theta, 12}\Sigma^{-1}_{\theta, 22}(g), \Sigma_{\theta, 11} - \Sigma_{\theta, 12}\Sigma^{-1}_{\theta, 22}\Sigma_{\theta, 21})
+\end{equation}
+
+
+Now, to simulate a future path given our simulated dataset, we follow the following steps:
+
+1. Draw \(\theta_{sample}\) from the posterior distribution.
+2. Calculate \(dG_{obs}\) given \(\theta = \theta_{sample}\). (Formula 3, \(dG_{obs} = dB^{H}\))
+3. Draw \(dG_{future}\) from Formula 5 using \(dG_{obs}\) from Step 2.
+4. Construct \(Xt_{future}\) from \(dG_{future}\) from Step 3.
+
+
+If we simulate enough future paths, we can get a good prediction interval. 
+
+Simulating \(dG_{future}\) is an expensive computation if the simulated dataset is large or the number of prediction points is large (inverting and multiplying matrices is hard!). As an approximation, we could use the last *P* obsverved fBM increments and discard the rest, as the correlation values are likely small, especially if *H* is close to 0.5. We only tried to predict 10 points so we didn't run into this issue. Also, we picked H = 0.9 for our simulated dataset, so we would need to use a lot of observed points anyways.
+
+
+The results after Step 3 are shown in Figure 8. Note that since the observed dGs are above zero, the distribution of future dGs are also centered above zero.
+
+
+```{r dGFuture, eval=TRUE, cache=TRUE, echo=FALSE, fig.height = 4, fig.cap="Grey: distribution of observed dG values. Blue: distribution of predicted future dG values. 100 simulations were done to create these distributions."}
+plot(NULL, xlim=c(280, 320), ylim=c(-3,3), main = "Observed and Predicted dGs", xlab = "time (t)", ylab = "dG(t)")
+CI <- apply(pred_obj$dGs_obs_matrix, 2, function(ts) { quantile(ts, probs = c(0.05, 0.95)) })
+polygon(c(280:300, rev(280:300)), c(CI[1,280:300], rev(CI[2,280:300])), col = "grey90", border = NA)
+
+CI <- apply(pred_obj$dGs_obs_matrix, 2, function(ts) { quantile(ts, probs = c(0.25, 0.75)) })
+polygon(c(280:300, rev(280:300)), c(CI[1,280:300], rev(CI[2,280:300])), col = "grey50", border = NA)
+
+points(280:300, actual_dGs[280:300], cex = 0.3)
+
+
+CI_future <- apply(pred_obj$dGs_future_matrix, 2, function(ts) { quantile(ts, probs = c(0.05, 0.95)) })
+polygon(c(301:320, rev(301:320)), c(CI_future[1,], rev(CI_future[2,])), col = "slateblue1", border = NA)
+
+CI_future <- apply(pred_obj$dGs_future_matrix, 2, function(ts) { quantile(ts, probs = c(0.25, 0.75)) })
+polygon(c(301:320, rev(301:320)), c(CI_future[1,], rev(CI_future[2,])), col = "slateblue4", border = NA)
+abline(h = 0)
+```
+
+
+The results of Step 4 is shown in Figure 9. Since the distribution of future dGs is centered above zero, and the simulated dataset is only slightly mean-reverting (\(\gamma = 0.1\)), the predicted values of the fOU process are likely to be greater than the last observed value.
+
+The prediction interval also widens as time increases. This is because our picked \(\gamma\) value is very small. With a \(\gamma\) value of 1, the prediction interval will be fairly flat.
+
+
+```{r predictionIntervals, eval=TRUE, cache=TRUE, echo=FALSE, fig.height = 4, fig.cap="Last 20 points from the dataset, and 50% and 90% prediction intervals (grey, dark grey) generated with 100 future sample paths."}
+plot_prediction_interval(fOU_data, pred_obj$pred_matrix)
+abline(h=tail(fOU_data$Xt, 1))
+```
+
+
+### Future Work
+
+This project was mostly a prototype of the results found in (M. Lysy, 2013), using Stan and a custom analytic gradient. There are more cSDEs to be tried. There are also real datasets that we can use instead of simulating data.
+
+We were surprised that increasing the resolution level didn't improve the fitting. It's possible that as the dataset gets bigger, the resolution level will positively affect the fit.
+
+The major blocker to fitting bigger datasets (N > 2000) is the memory usage. In our C++ code, every time we need to calculate a log density or gradient, we create a new instance of the NormalToeplitz solver which does a lot of memory allocation. In our simulations (N = 300), at some point there were 4 threads using 3GB of memory each. This obviously won't scale. Fixing this will likely also improve runtime performance. We have some ideas for fixes, namely using a custom c++ memory allocator, but more investigation is required.
+
+### References
+
+-  Betancourt, M. (2018). A Conceptual Introduction to Hamiltonian Monte Carlo. Retrieved from https://arxiv.org/abs/1701.02434
+- Kucukelbir, A., Tran, D., Ranganath, R., Gelman, A., & Blei, D. M. (2016). Automatic
+differentiation variational inference. Retrieved from https://arxiv.org/abs/1603.00788
+- Baydin, A. G., Pearlmutter, B. A., Radul, A. A., & Siskind, J. M. (2018). Automatic differentiation in machine learning:survey. CoRR, abs/1502.05767 . Retrieved from http://arxiv.org/abs/1502.05767 [https://arxiv.org/pdf/1502.05767.pdf]
+- Lysy, M., & Pillai, N. S. (2013). Statistical Inference for Stochastic Differential Equations with Memory. Retrieved from https://arxiv.org/abs/1307.1164
+- Carpenter, B., Hoffman, M. D., Brubaker, M. A., Lee, D., Li, P., & Betancourt, M. J. (2015).The stan math library: Reverse-mode automatic differentiation in c++. Retrieved from https://arxiv.org/abs/1509.07164
+- Margossian, C. C., (2019) A review of automatic differentiation anad its efficient implementation. Retrieved April 19, 2020, from https://arxiv.org/abs/1811.05031
+
+\newpage
+
+## Appendix
+
+### Stan Fit Information
+
+```{r stanfitInfo, eval=TRUE, cache=TRUE, echo=TRUE, fig.cap="StanFit information"}
+print("K = 1")
+rstan::summary(fits[[1]], pars=c("H", "mu", "gamma"))$summary
+print("K = 2")
+rstan::summary(fits[[2]], pars=c("H", "mu", "gamma"))$summary
+print("K = 4")
+rstan::summary(fits[[3]], pars=c("H", "mu", "gamma"))$summary
+```
+
+\newpage
+
+### Autocorrelation of Simulated dGs vs expected autocorrelation
+
+```{r acf, eval=TRUE, cache=TRUE, echo=TRUE}
+dGs <- get_dGs(fOU_data, fOU_data$theta)
+dGs_acf <- acf(dGs, plot = FALSE)$acf[1:10]
+expected_acf <- fou_gamma(fOU_data$theta, 1, 10)
+plot(NULL, ylim=c(-0.5, 1), xlim=c(1,10), ylab = "correlation", xlab = "time difference (t)")
+points(1:10, dGs_acf, col = "blue")
+points(1:10, expected_acf,  col = "red")
+```
+
+\newpage
+
+### All plotting code used in this report
+
+
+#### plot of simulated data
+```{r plotting, eval=TRUE, cache=TRUE, echo=TRUE} 
+# using saved data so the simming/fitting lines are commented out
+# delta_t <- 1
+# N <- 300
+# H <- 0.9
+# X0 <- 0
+# gamma <- 0.1
+# mu <- 0
+
+# fOU_data <- fOU_sim(N, list(H=H, gamma=gamma, mu=mu), X0, delta_t)
+# fits_and_samples <- fit_fOU_multiple_K(fOU_data$Xt, c(1, 2, 4))
+# save(fits_and_samples, fOU_data, file="goodfits.RData")
+
+# loading fits_and_samples, fOU_data
+# FIXME: specify your own path for this.
+load("~/Documents/goodfits.RData")
+
+# Start of Methodology/Analysis
+
+# Explain how we simulated data
+# Show simulated data
+plot(fOU_data$Xt)
+
+
+post_tb <- fits_and_samples$post_samples
+post_tb$K_factor <- factor(post_tb$K)
+fits <- fits_and_samples$fits
+```
+
+#### Diagnostics
+```{r plotdiagnostics, echo=TRUE, cache=TRUE, eval=TRUE}
+
+# Talk about fitting. Prior justification, using pre-specified initial values.
+# plot posterior distributions to see if everything fit well.
+testproject1::plot_param_posterior_distributions(post_tb, fOU_data)
+
+par(mfrow=c(1,3))
+qqnorm(post_tb %>% filter(K == 1) %>% pull(mu))
+qqnorm(post_tb %>% filter(K == 2) %>% pull(mu))
+qqnorm(post_tb %>% filter(K == 4) %>% pull(mu))
+# These distributions looks fairly normal, but slightly skewed.
+
+# autodiff experiment
+matrixSizes <- c(5, 10, 50, 100, 500, 1000, 5e3)
+autodiff_times <- c(0.8, 0.957, 3.59, 19.7, 976.62, 10238.7, 871285.0)
+analytic_times <- c(0.78, 0.95, 3.54, 4.52, 58.18, 62.67, 415.66)
+df <- as.data.frame(list(matrixSize=matrixSizes, autodiff_times=autodiff_times, analytic_times=analytic_times))
+knitr::kable(df)
+
+# goodness of fit checks:
+# talk about how we can grid search on parameters since it's a fairly small constraint space.
+# plot likelihood functions for k = 1 against means of posterior distributions
+testproject1::plot_likelihoods(fOU_data, fits[[1]], 1)
+
+# goodness of fit check #2:
+# for k > 1 level approximations, lets look at the generated confidence intervals in between the data.
+par(mfrow=c(1,2))
+plot_CI(fOU_data, fits[[2]], 2, 10, "Xt with CIs (K = 2)")
+plot_CI(fOU_data, fits[[3]], 4, 10, "Xt with CIs (K = 4)")
+```
+
+#### Predictions
+```{r plotpred, echo=TRUE, cache=TRUE, eval=TRUE}
+
+par(mfrow=c(1,3))
+# plot dG observed distribution with future, predicted dG
+pred_obj <- fOU_predict(fOU_data, fits[[1]], tail(fOU_data$Xt, 1), fOU_data$delta_t, 20, 100)
+actual_dGs <- get_dGs(fOU_data, fOU_data$theta)
+
+plot(NULL, xlim=c(1, 320), ylim=c(-3,3))
+CI <- apply(pred_obj$dGs_obs_matrix, 2, function(ts) { quantile(ts, probs = c(0.05, 0.95)) })
+polygon(c(1:300, rev(1:300)), c(CI[1,], rev(CI[2,])), col = "grey90", border = NA)
+
+CI <- apply(pred_obj$dGs_obs_matrix, 2, function(ts) { quantile(ts, probs = c(0.25, 0.75)) })
+polygon(c(1:300, rev(1:300)), c(CI[1,], rev(CI[2,])), col = "grey50", border = NA)
+points(1:300, actual_dGs, cex = 0.3)
+
+CI_future <- apply(pred_obj$dGs_future_matrix, 2, function(ts) { quantile(ts, probs = c(0.05, 0.95)) })
+polygon(c(301:320, rev(301:320)), c(CI_future[1,], rev(CI_future[2,])), col = "slateblue1", border = NA)
+
+CI_future <- apply(pred_obj$dGs_future_matrix, 2, function(ts) { quantile(ts, probs = c(0.25, 0.75)) })
+polygon(c(301:320, rev(301:320)), c(CI_future[1,], rev(CI_future[2,])), col = "slateblue4", border = NA)
+
+# closer look
+plot(NULL, xlim=c(280, 320), ylim=c(-3,3))
+CI <- apply(pred_obj$dGs_obs_matrix, 2, function(ts) { quantile(ts, probs = c(0.05, 0.95)) })
+polygon(c(280:300, rev(280:300)), c(CI[1,280:300], rev(CI[2,280:300])), col = "grey90", border = NA)
+
+CI <- apply(pred_obj$dGs_obs_matrix, 2, function(ts) { quantile(ts, probs = c(0.25, 0.75)) })
+polygon(c(280:300, rev(280:300)), c(CI[1,280:300], rev(CI[2,280:300])), col = "grey50", border = NA)
+
+points(280:300, actual_dGs[280:300], cex = 0.3)
+
+
+CI_future <- apply(pred_obj$dGs_future_matrix, 2, function(ts) { quantile(ts, probs = c(0.05, 0.95)) })
+polygon(c(301:320, rev(301:320)), c(CI_future[1,], rev(CI_future[2,])), col = "slateblue1", border = NA)
+
+CI_future <- apply(pred_obj$dGs_future_matrix, 2, function(ts) { quantile(ts, probs = c(0.25, 0.75)) })
+polygon(c(301:320, rev(301:320)), c(CI_future[1,], rev(CI_future[2,])), col = "slateblue4", border = NA)
+abline(h = 0)
+
+
+# observed Xt with predicted Xt distribution
+plot_prediction_interval(fOU_data, pred_obj$pred_matrix)
+abline(h=tail(fOU_data$Xt, 1))
+```
